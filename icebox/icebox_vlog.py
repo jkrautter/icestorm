@@ -24,6 +24,7 @@ lookup_pins = False
 check_ieren = False
 check_driver = False
 lookup_symbols = False
+keep = False
 do_collect = False
 package = None
 pcf_data = dict()
@@ -64,6 +65,9 @@ Usage: icebox_vlog [options] [bitmap.asc]
     -c
         collect multi-bit ports
 
+    -k
+        Use syn_keep and syn_noprune attribute on all wires/registers
+
     -R
         enable IeRen database checks
 
@@ -73,7 +77,7 @@ Usage: icebox_vlog [options] [bitmap.asc]
     sys.exit(0)
 
 try:
-    opts, args = getopt.getopt(sys.argv[1:], "sSlLap:P:n:d:cRD")
+    opts, args = getopt.getopt(sys.argv[1:], "sSlLap:P:n:d:ckRD")
 except:
     usage()
 
@@ -120,6 +124,8 @@ for o, a in opts:
         package = a
     elif o == "-c":
         do_collect = True
+    elif o == "-k":
+        keep = True
     elif o == "-R":
         check_ieren = True
     elif o == "-D":
@@ -310,7 +316,11 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
                     text_ports.append("output %s" % p)
                 else:
                     text_ports.append("inout %s" % p)
-                text_wires.append("wire %s;" % n)
+                
+                if keep:
+                    text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n)
+                else:
+                    text_wires.append("wire %s;" % n)
                 renamed_net_to_port = True
             elif idx in iocells_in and idx not in iocells_out:
                 text_ports.append("input %s" % p)
@@ -336,7 +346,10 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
         seg2net[s] = n
 
     if not renamed_net_to_port:
-        text_wires.append("wire %s;" % n)
+        if keep:
+            text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n)
+        else:
+            text_wires.append("wire %s;" % n)
 
     for s in segs:
         if not strip_interconn or not is_interconn(s[2]):
@@ -368,13 +381,19 @@ def seg_to_net(seg, default=None):
             if default == "-":
                 n = "open_%d" % netidx[1]
                 netidx[1] += 1
-                text_wires.append("wire %s;" % n)
+                if keep:
+                    text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n)
+                else:
+                    text_wires.append("wire %s;" % n)
                 return n
             return default
         n = next_netname()
         nets[n] = set([seg])
         seg2net[seg] = n
-        text_wires.append("wire %s;" % n)
+        if keep:
+            text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n)
+        else:
+            text_wires.append("wire %s;" % n)
         if not strip_comments:
             if not strip_interconn or not is_interconn(seg[2]):
                 text_wires.append("// %s" % (seg,))
@@ -405,12 +424,14 @@ if lookup_symbols:
                                 break
                             name += "_"
                         if name not in exported_names:
-                            text_func.append("wire \\_%s = %s;" % (name, seg2net[seg]))
+                            if keep:
+                                text_func.append("wire \\_%s = %s; /* synthesis syn_keep=1 */" % (name, seg2net[seg]))
+                            else:
+                                text_func.append("wire \\_%s = %s;" % (name, seg2net[seg]))
                             exported_names[name] = seg2net[seg]
                     current_net = -1
     text_func.append("")
 
-#print(nets)
 wb_boot = seg_to_net(icebox.warmbootinfo_db[ic.device]["BOOT"], "")
 wb_s0 = seg_to_net(icebox.warmbootinfo_db[ic.device]["S0"], "")
 wb_s1 = seg_to_net(icebox.warmbootinfo_db[ic.device]["S1"], "")
@@ -616,7 +637,10 @@ for cell in iocells:
             if net_din0 != "":
                 if iotype[1] == "0" and iotype[0] == "0":
                     reg_din0 = next_netname()
-                    text_func.append("reg %s;" % reg_din0)
+                    if keep:
+                        text_func.append("reg %s; /* synthesis syn_noprune=1 */" % reg_din0)
+                    else:
+                        text_func.append("reg %s;" % reg_din0)
                     text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_iclk, icen_cond, reg_din0, net_pad))
                     text_func.append("assign %s = %s;" % (net_din0, reg_din0))
 
@@ -626,20 +650,29 @@ for cell in iocells:
                 if iotype[1] == "1" and iotype[0] == "0":
                     reg_din0 = next_netname()
                     reg_din0_latched = next_netname()
-                    text_func.append("reg %s, %s;" % (reg_din0, reg_din0_latched))
+                    if keep:
+                        text_func.append("reg %s, %s; /* synthesis syn_noprune=1 */" % (reg_din0, reg_din0_latched))
+                    else:
+                        text_func.append("reg %s, %s;" % (reg_din0, reg_din0_latched))
                     text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_iclk, icen_cond, reg_din0, net_pad))
                     text_func.append("always @* if (!%s) %s = %s;" % (net_latch, reg_din0_latched, reg_din0))
                     text_func.append("assign %s = %s;" % (net_din0, reg_din0_latched))
 
                 if iotype[1] == "1" and iotype[0] == "1":
                     reg_din0 = next_netname()
-                    text_func.append("reg %s;" % reg_din0)
+                    if keep:
+                        text_func.append("reg %s; /* synthesis syn_noprune=1 */" % reg_din0)
+                    else:
+                        text_func.append("reg %s;" % reg_din0)
                     text_func.append("always @* if (!%s) %s = %s;" % (net_latch, reg_din0, net_pad))
                     text_func.append("assign %s = %s;" % (net_din0, reg_din0))
 
             if net_din1 != "":
                 reg_din1 = next_netname()
-                text_func.append("reg %s;" % reg_din1)
+                if keep:
+                    text_func.append("reg %s; /* synthesis syn_noprune=1 */" % reg_din1)
+                else:
+                    text_func.append("reg %s;" % reg_din1)
                 text_func.append("always @(%s %s) %s%s <= %s;" % (negedge, net_iclk, icen_cond, reg_din1, net_pad))
                 text_func.append("assign %s = %s;" % (net_din1, reg_din1))
 
@@ -659,7 +692,10 @@ for cell in iocells:
 
             if iotype[5] == "1" and iotype[4] == "1":
                 eff_oen = next_netname()
-                text_func.append("reg %s;" % eff_oen)
+                if keep:
+                    text_func.append("reg %s; /* synthesis syn_noprune=1 */" % eff_oen)
+                else:
+                    text_func.append("reg %s;" % eff_oen)
                 text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_oclk, ocen_cond, eff_oen, net_oen))
 
             # effective DOUT: iotype[2], iotype[3]
@@ -667,11 +703,17 @@ for cell in iocells:
             if iotype[2] == "0" and iotype[3] == "0":
                 ddr_posedge = next_netname()
                 ddr_negedge = next_netname()
-                text_func.append("reg %s, %s;" % (ddr_posedge, ddr_negedge))
+                if keep:
+                    text_func.append("reg %s, %s; /* synthesis syn_noprune=1 */" % (ddr_posedge, ddr_negedge))
+                else:
+                    text_func.append("reg %s, %s;" % (ddr_posedge, ddr_negedge))
                 text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_oclk, ocen_cond, ddr_posedge, net_dout0))
                 text_func.append("always @(%s %s) %s%s <= %s;" % (negedge, net_oclk, ocen_cond, ddr_negedge, net_dout1))
                 eff_dout = next_netname()
-                text_func.append("wire %s;" % (eff_dout))
+                if keep:
+                    text_func.append("wire %s; /* synthesis syn_keep=1 */" % (eff_dout))
+                else:
+                    text_func.append("wire %s;" % (eff_dout))
                 if cell in iocells_negclk:
                     text_func.append("assign %s = %s ? %s : %s;" % (eff_dout, net_oclk, ddr_negedge, ddr_posedge))
                 else:
@@ -682,12 +724,18 @@ for cell in iocells:
 
             if iotype[2] == "1" and iotype[3] == "0":
                 eff_dout = next_netname()
-                text_func.append("reg %s;" % eff_dout)
+                if keep:
+                    text_func.append("reg %s; /* synthesis syn_noprune=1 */" % eff_dout)
+                else:
+                    text_func.append("reg %s;" % eff_dout)
                 text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_oclk, ocen_cond, eff_dout, net_dout0))
 
             if iotype[2] == "1" and iotype[3] == "1":
                 eff_dout = next_netname()
-                text_func.append("reg %s;" % eff_dout)
+                if keep:
+                    text_func.append("reg %s; /* synthesis syn_noprune=1 */" % eff_dout)
+                else:
+                    text_func.append("reg %s;" % eff_dout)
                 text_func.append("always @(%s %s) %s%s <= !%s;" % (posedge, net_oclk, ocen_cond, eff_dout, net_dout0))
 
             if eff_oen == "1":
@@ -889,7 +937,7 @@ new_text_wires = list()
 new_text_regs = list()
 new_text_raw = list()
 for line in text_wires:
-    match = re.match(r"wire ([^ ;]+)(.*)", line)
+    match = re.match(r"wire ([^\s;]+)(.*);(.*)", line)
     if match:
         if strip_comments:
             name = match.group(1)
@@ -902,15 +950,24 @@ for line in text_wires:
             continue
         else:
             if match.group(1) in wire_to_reg:
-                line = "reg " + match.group(1) + " = 0" + match.group(2)
+                if keep:
+                    line = "reg " + match.group(1) + " = 0 /* synthesis syn_noprune=1 */;" + match.group(3)
+                else:
+                    line = "reg " + match.group(1) + " = 0;" + match.group(3)
     if strip_comments:
         new_text_raw.append(line)
     else:
         print(line)
 for names in [new_text_wires[x:x+10] for x in range(0, len(new_text_wires), 10)]:
-    print("wire %s;" % ", ".join(names))
+    if keep:
+        print("wire %s /* synthesis syn_keep=1 */;" % " /* synthesis syn_keep=1 */, ".join(names))
+    else:
+        print("wire %s;" % ", ".join(names))
 for names in [new_text_regs[x:x+10] for x in range(0, len(new_text_regs), 10)]:
-    print("reg %s = 0;" % " = 0, ".join(names))
+    if keep:
+        print("reg %s = 0 /* synthesis syn_noprune=1 */; " % " = 0 /* synthesis syn_noprune=1 */, ".join(names))
+    else:
+        print("reg %s = 0;" % " = 0, ".join(names))
 if strip_comments:
     for line in new_text_raw:
         print(line)
