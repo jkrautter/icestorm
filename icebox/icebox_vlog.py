@@ -112,7 +112,7 @@ for o, a in opts:
                         p = re.sub(r"_gb_io$", "", p)
                         p = re.sub(r"_pad(_[0-9]+|)$", r"\1", p)
                     portnames.add(p)
-                    if not re.match(r"[a-zA-Z_][a-zA-Z0-9_]*$", p):
+                    if not re.match(r"[a-zA-Z_\[\]][a-zA-Z0-9_\[\]]*$", p):
                         p = "\\%s " % p
                     unmatched_ports.add(p)
                     if len(line) > 3:
@@ -332,7 +332,7 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
                 text_ports.append("inout %s" % p)
                 text_wires.append("assign %s = %s;" % (p, n))
 
-        match =  re.match("lutff_(\d+)/", s[2])
+        match = re.match("lutff_(\d+)/", s[2])
         if match:
             #IpCon and DSP tiles look like logic tiles, but aren't.
             if ic.device == "5k" and (s[0] == 0 or s[0] == ic.max_x):
@@ -973,16 +973,6 @@ if strip_comments:
     for line in new_text_raw:
         print(line)
     print()
-
-if do_collect:
-    for port, direct in list(vec_ports_dir.items()):
-        min_idx = vec_ports_min[port]
-        max_idx = vec_ports_max[port]
-        for i in range(min_idx, max_idx+1):
-            if direct == "input":  print("assign %s[%d] = %s [%d];"  % (port, i, port, i))
-            if direct == "output": print("assign %s [%d] = %s[%d] ;" % (port, i, port, i))
-            if direct == "inout":  print("tran(%s [%d], %s[%d] );"   % (port, i, port, i))
-        print()
 
 for line in text_func:
     print(line)
