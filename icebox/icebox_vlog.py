@@ -364,6 +364,7 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
         if re.match(r"io_./D_IN_", s[2]): count_drivers.append(s[2])
         if re.match(r"lutff_./out", s[2]): count_drivers.append(s[2])
         if re.match(r"lutff_./lout", s[2]): count_drivers.append(s[2])
+        if re.match(r"lutff_./cout", s[2]): count_drivers.append(s[2])
 
     if len(count_drivers) != 1 and check_driver:
         failed_drivers_check.append((n, count_drivers))
