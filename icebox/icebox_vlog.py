@@ -112,7 +112,7 @@ for o, a in opts:
                         p = re.sub(r"_gb_io$", "", p)
                         p = re.sub(r"_pad(_[0-9]+|)$", r"\1", p)
                     portnames.add(p)
-                    if not re.match(r"[a-zA-Z_][a-zA-Z0-9_]*$", p):
+                    if not re.match(r"[a-zA-Z_\[\]][a-zA-Z0-9_\[\]]*$", p):
                         p = "\\%s " % p
                     unmatched_ports.add(p)
                     if len(line) > 3:
@@ -859,6 +859,7 @@ for lut in luts_queue:
     net_in3 = seg_to_net((lut[0], lut[1], "lutff_%d/in_3" % lut[2]), "1'b0")
     net_out = seg_to_net((lut[0], lut[1], "lutff_%d/out" % lut[2]))
     net_lout = seg_to_net((lut[0], lut[1], "lutff_%d/lout" % lut[2]))
+    net_out = net_out.replace("[(\d)]", "\1")
     if seq_bits[0] == "1":
         net_cout = seg_to_net((lut[0], lut[1], "lutff_%d/cout" % lut[2]))
         net_in1 = seg_to_net((lut[0], lut[1], "lutff_%d/in_1" % lut[2]), "1'b0")
@@ -913,11 +914,11 @@ for lut in luts_queue:
 for a in const_assigns + lut_assigns + carry_assigns:
     text_func.append("assign %-*s = %s;" % (max_net_len, a[0], a[1]))
 
+new_text_ports = set()
+vec_ports_min = dict()
+vec_ports_max = dict()
+vec_ports_dir = dict()
 if do_collect:
-    new_text_ports = set()
-    vec_ports_min = dict()
-    vec_ports_max = dict()
-    vec_ports_dir = dict()
     for port in text_ports:
         match = re.match(r"(input|output|inout) (.*)\[(\d+)\] ?$", port);
         if match:
@@ -942,19 +943,18 @@ for line in text_wires:
     if match:
         if strip_comments:
             name = match.group(1)
-            if name.startswith("\\"):
-                name += " "
             if match.group(1) in wire_to_reg:
                 new_text_regs.append(name)
             else:
                 new_text_wires.append(name)
             continue
         else:
+            name = match.group(1)
             if match.group(1) in wire_to_reg:
                 if keep:
-                    line = "reg " + match.group(1) + " = 0 /* synthesis syn_noprune=1 */;" + match.group(3)
+                    line = "reg " + name + " = 0 /* synthesis syn_noprune=1 */;" + match.group(3)
                 else:
-                    line = "reg " + match.group(1) + " = 0;" + match.group(3)
+                    line = "reg " + name + " = 0;" + match.group(3)
     if strip_comments:
         new_text_raw.append(line)
     else:
@@ -974,15 +974,15 @@ if strip_comments:
         print(line)
     print()
 
-if do_collect:
-    for port, direct in list(vec_ports_dir.items()):
-        min_idx = vec_ports_min[port]
-        max_idx = vec_ports_max[port]
-        for i in range(min_idx, max_idx+1):
-            if direct == "input":  print("assign %s[%d] = %s [%d];"  % (port, i, port, i))
-            if direct == "output": print("assign %s [%d] = %s[%d] ;" % (port, i, port, i))
-            if direct == "inout":  print("tran(%s [%d], %s[%d] );"   % (port, i, port, i))
-        print()
+#if do_collect:
+#    for port, direct in list(vec_ports_dir.items()):
+#        min_idx = vec_ports_min[port]
+#        max_idx = vec_ports_max[port]
+#        for i in range(min_idx, max_idx+1):
+#            if direct == "input":  print("assign %s%d = %s[%d];"  % (port, i, port, i))
+#            if direct == "output": print("assign %s[%d] = %s%d ;" % (port, i, port, i))
+#            if direct == "inout":  print("tran(%s[%d], %s[%d] );"   % (port, i, port, i))
+#        print()
 
 for line in text_func:
     print(line)
