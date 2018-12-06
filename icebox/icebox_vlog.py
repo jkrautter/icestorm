@@ -28,6 +28,7 @@ keep = False
 do_collect = False
 primitives = False
 package = None
+pcf_out = None
 pcf_data = dict()
 portnames = set()
 unmatched_ports = set()
@@ -51,6 +52,9 @@ Usage: icebox_vlog [options] [bitmap.asc]
 
     -n <module-name>
         name for the exported module (default: "chip")
+        
+    -o <pcf-output>
+        export location information to the specified pcf file
 
     -p <pcf-file>
         use the set_io commands from the specified pcf file
@@ -82,7 +86,7 @@ Usage: icebox_vlog [options] [bitmap.asc]
     sys.exit(0)
 
 try:
-    opts, args = getopt.getopt(sys.argv[1:], "sSlLap:P:n:d:ckORD")
+    opts, args = getopt.getopt(sys.argv[1:], "sSlLao:p:P:n:d:ckORD")
 except:
     usage()
 
@@ -125,6 +129,8 @@ for o, a in opts:
                     else:
                         pinloc = (line[2],)
                     pcf_data[pinloc] = p
+    elif o == "-o":
+        pcf_out = open(a, "w");
     elif o == "-d":
         package = a
     elif o == "-c":
@@ -173,6 +179,8 @@ iocells_negclk = set()
 iocells_inbufs = set()
 iocells_skip = set()
 iocells_pll = set()
+locations = list()
+pins = list()
 
 def is_interconn(netname):
     if netname.startswith("sp4_"): return True
@@ -884,9 +892,11 @@ for lut in luts_queue:
         if primitives:
             carry_assigns.append("SB_CARRY %s_inst (.I0(%s), .I1(%s), .CI(%s), .CO(%s));" % 
                                  (net_cout, net_in1, net_in2, net_cin, net_cout))
+            locations.append((net_cout + "_inst", "%s %s %s" % (lut[0], lut[1], lut[2])))
         else:
             carry_assigns.append([net_cout, "/* CARRY %2d %2d %2d */ (%s & %s) | ((%s | %s) & %s)" %
                 (lut[0], lut[1], lut[2], net_in1, net_in2, net_in1, net_in2, net_cin)])
+            locations.append((net_cout, "%s %s %s" % (lut[0], lut[1], lut[2])))
     if seq_bits[1] == "1":
         net_cen = seg_to_net((lut[0], lut[1], "lutff_global/cen"), "1'b1")
         net_clk = seg_to_net((lut[0], lut[1], "lutff_global/clk"), "1'b0")
@@ -903,10 +913,12 @@ for lut in luts_queue:
                                    ("DFFNESR" if icebox.get_negclk_bit(tile) == "1" else "DFFESR", 
                                    net_out.replace('[', '').replace(']', '').rstrip(), net_sr, net_cen, 
                                    net_lout, net_clk, net_out, " /* synthesis syn_noprune=1 */" if keep else ""))
+                locations.append((net_out.replace('[', '').replace(']', '').rstrip() + "_inst", "%s %s %s" % (lut[0], lut[1], lut[2])))
             else:
                 always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s ? 1'b%s : %s;" %
                     (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
                     net_clk, net_cen, net_out, net_sr, seq_bits[2], net_lout))
+                locations.append((net_out, "%s %s %s" % (lut[0], lut[1], lut[2])))
         else:
             if primitives:
                 if (net_sr == "1'b0"):
@@ -924,6 +936,7 @@ for lut in luts_queue:
                 always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s, posedge %s) if (%s) %s <= 1'b%s; else if (%s) %s <= %s;" %
                     (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
                     net_clk, net_sr, net_sr, net_out, seq_bits[2], net_cen, net_out, net_lout))
+                locations.append((net_out, "%s %s %s" % (lut[0], lut[1], lut[2])))
         if not primitives:
             wire_to_reg.add(net_out.strip())
     else:
@@ -935,8 +948,10 @@ for lut in luts_queue:
         if primitives:
             const_assigns.append("SB_LUT4 #(.LUT_INIT(16'b1111111111111111)) %s_inst(.O(%s))%s;" % 
                 (net_lout, net_lout, " /* synthesis syn_noprune=1 */" if keep else ""))
+            locations.append((net_lout + "_inst", "%s %s %s" % (lut[0], lut[1], lut[2])))
         else:
             const_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ 1'b1" % (lut[0], lut[1], lut[2])])
+            locations.append((net_lout, "%s %s %s" % (lut[0], lut[1], lut[2])))
     else:
         def make_lut_expr(bits, sigs):
             if not sigs:
@@ -991,8 +1006,11 @@ for lut in luts_queue:
             lut_bits_reversed.reverse()
             lut_assigns.append("SB_LUT4 #(.LUT_INIT(16'b%s)) %s_inst(.I0(%s), .I1(%s), .I2(%s), .I3(%s), .O(%s))%s; // expr: %s" %
                 ("".join(lut_bits_reversed), net_lout, net_in0, net_in1, net_in2, net_in3, net_lout, " /* synthesis syn_noprune=1 */" if keep else "", lut_expr))
+            locations.append((net_lout + "_inst", "%s %s %s" % (lut[0], lut[1], lut[2])))
         else:
             lut_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ %s" % (lut[0], lut[1], lut[2], lut_expr)])
+            locations.append((net_lout, "%s %s %s" % (lut[0], lut[1], lut[2])))
+    
     max_net_len = max(max_net_len, len(net_lout))
 
 for a in const_assigns + lut_assigns + carry_assigns:
@@ -1054,7 +1072,7 @@ for line in text_wires:
                         line = "reg " + name + " = 0 /* synthesis syn_noprune=1 */;" + match.group(3)
                     else:
                         line = "reg " + name + " = 0;" + match.group(3)
-                elif pcf_data and match.group(1) in portnames:
+                elif not pcf_data or match.group(1) in portnames:
                     line = "// " + line 
     if strip_comments:
         new_text_raw.append(line)
@@ -1097,6 +1115,13 @@ if unmatched_ports:
 
 print("endmodule")
 print()
+
+if pcf_out is not None:
+    for (x, y) in locations:
+        pcf_out.write("set_location " + str(x) + " " + str(y) + "\n")
+    for p in pins:
+        pcf_out.write("set_io pin_%s %s\n" % (p, p))
+         
 
 if failed_drivers_check:
     emsg = ["Single-driver-check failed for %d nets:" % len(failed_drivers_check)]
