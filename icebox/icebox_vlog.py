@@ -26,6 +26,7 @@ check_driver = False
 lookup_symbols = False
 keep = False
 do_collect = False
+primitives = False
 package = None
 pcf_data = dict()
 portnames = set()
@@ -53,6 +54,7 @@ Usage: icebox_vlog [options] [bitmap.asc]
 
     -p <pcf-file>
         use the set_io commands from the specified pcf file
+        should be used with -c if multi-bit ports exist
 
     -P <pcf-file>
         like -p, enable some hacks for pcf files created
@@ -68,6 +70,9 @@ Usage: icebox_vlog [options] [bitmap.asc]
     -k
         Use syn_keep and syn_noprune attribute on all wires/registers
 
+    -O
+        Use Lattice iCE40 library primitives
+
     -R
         enable IeRen database checks
 
@@ -77,7 +82,7 @@ Usage: icebox_vlog [options] [bitmap.asc]
     sys.exit(0)
 
 try:
-    opts, args = getopt.getopt(sys.argv[1:], "sSlLap:P:n:d:ckRD")
+    opts, args = getopt.getopt(sys.argv[1:], "sSlLap:P:n:d:ckORD")
 except:
     usage()
 
@@ -126,6 +131,8 @@ for o, a in opts:
         do_collect = True
     elif o == "-k":
         keep = True
+    elif o == "-O":
+        primitives = True
     elif o == "-R":
         check_ieren = True
     elif o == "-D":
@@ -596,7 +603,7 @@ for pllid in ic.pll_list():
 
 for cell in iocells:
     if cell in iocells_type:
-        net_pad   = seg_to_net((cell[0], cell[1], "io_%d/PAD" % cell[2]))
+        net_pad   = seg_to_net((cell[0], cell[1], "io_%d/PAD" % cell[2]), "")
         net_din0  = seg_to_net((cell[0], cell[1], "io_%d/D_IN_0" % cell[2]), "")
         net_din1  = seg_to_net((cell[0], cell[1], "io_%d/D_IN_1" % cell[2]), "")
         net_dout0 = seg_to_net((cell[0], cell[1], "io_%d/D_OUT_0" % cell[2]), "0")
@@ -606,6 +613,7 @@ for cell in iocells:
         net_iclk  = seg_to_net((cell[0], cell[1], "io_global/inclk"), "0")
         net_oclk  = seg_to_net((cell[0], cell[1], "io_global/outclk"), "0")
         net_latch = seg_to_net((cell[0], cell[1], "io_global/latch"), "0")
+        net_fabout = seg_to_net((cell[0], cell[1], "fabout"), "")
         iotype = iocells_type[cell]
 
         if cell in iocells_negclk:
@@ -859,7 +867,6 @@ for lut in luts_queue:
     net_in3 = seg_to_net((lut[0], lut[1], "lutff_%d/in_3" % lut[2]), "1'b0")
     net_out = seg_to_net((lut[0], lut[1], "lutff_%d/out" % lut[2]))
     net_lout = seg_to_net((lut[0], lut[1], "lutff_%d/lout" % lut[2]))
-    net_out = net_out.replace("[(\d)]", "\1")
     if seq_bits[0] == "1":
         net_cout = seg_to_net((lut[0], lut[1], "lutff_%d/cout" % lut[2]))
         net_in1 = seg_to_net((lut[0], lut[1], "lutff_%d/in_1" % lut[2]), "1'b0")
@@ -874,27 +881,62 @@ for lut in luts_queue:
                     text_wires.append("")
         else:
             net_cin = seg_to_net((lut[0], lut[1], "lutff_%d/cout" % (lut[2]-1)), "1'b0")
-        carry_assigns.append([net_cout, "/* CARRY %2d %2d %2d */ (%s & %s) | ((%s | %s) & %s)" %
+        if primitives:
+            carry_assigns.append("SB_CARRY %s_inst (.I0(%s), .I1(%s), .CI(%s), .CO(%s));" % 
+                                 (net_cout, net_in1, net_in2, net_cin, net_cout))
+        else:
+            carry_assigns.append([net_cout, "/* CARRY %2d %2d %2d */ (%s & %s) | ((%s | %s) & %s)" %
                 (lut[0], lut[1], lut[2], net_in1, net_in2, net_in1, net_in2, net_cin)])
     if seq_bits[1] == "1":
         net_cen = seg_to_net((lut[0], lut[1], "lutff_global/cen"), "1'b1")
         net_clk = seg_to_net((lut[0], lut[1], "lutff_global/clk"), "1'b0")
         net_sr  = seg_to_net((lut[0], lut[1], "lutff_global/s_r"), "1'b0")
         if seq_bits[3] == "0":
-            always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s ? 1'b%s : %s;" %
+            if primitives:
+                if (net_sr == "1'b0"):
+                    always_stmts.append("SB_%s %s_inst (.E(%s), .D(%s), .C(%s), .Q(%s))%s;" % 
+                                   ("DFFNE" if icebox.get_negclk_bit(tile) == "1" else "DFFE", 
+                                   net_out.replace('[', '').replace(']', '').rstrip(), net_cen, 
+                                   net_lout, net_clk, net_out, " /* synthesis syn_noprune=1 */" if keep else ""))
+                else:
+                    always_stmts.append("SB_%s %s_inst (.R(%s), .E(%s), .D(%s), .C(%s), .Q(%s))%s;" % 
+                                   ("DFFNESR" if icebox.get_negclk_bit(tile) == "1" else "DFFESR", 
+                                   net_out.replace('[', '').replace(']', '').rstrip(), net_sr, net_cen, 
+                                   net_lout, net_clk, net_out, " /* synthesis syn_noprune=1 */" if keep else ""))
+            else:
+                always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s ? 1'b%s : %s;" %
                     (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
                     net_clk, net_cen, net_out, net_sr, seq_bits[2], net_lout))
         else:
-            always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s, posedge %s) if (%s) %s <= 1'b%s; else if (%s) %s <= %s;" %
+            if primitives:
+                if (net_sr == "1'b0"):
+                    always_stmts.append("SB_%s %s_inst (.E(%s), .D(%s), .C(%s), .Q(%s))%s;" % 
+                                        ("DFFNE" if icebox.get_negclk_bit(tile) == "1" else "DFFE", 
+                                        net_out.replace('[', '').replace(']', '').rstrip(), net_cen,
+                                        net_lout, net_clk, net_out, " /* synthesis syn_noprune=1 */" if keep else ""))
+                else:
+                    always_stmts.append("SB_%s %s_inst (.R(%s), .E(%s), .D(%s), .C(%s), .Q(%s))%s;" % 
+                                        ("DFFNESR" if icebox.get_negclk_bit(tile) == "1" else "DFFESR", 
+                                        net_out.replace('[', '').replace(']', '').rstrip(), net_sr, net_cen,
+                                        net_lout, net_clk, net_out, " /* synthesis syn_noprune=1 */" if keep else ""))
+                locations.append((net_out.replace('[', '').replace(']', '').rstrip() + "_inst", "%s %s %s" % (lut[0], lut[1], lut[2])))
+            else:
+                always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s, posedge %s) if (%s) %s <= 1'b%s; else if (%s) %s <= %s;" %
                     (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
                     net_clk, net_sr, net_sr, net_out, seq_bits[2], net_cen, net_out, net_lout))
-        wire_to_reg.add(net_out.strip())
+        if not primitives:
+            wire_to_reg.add(net_out.strip())
     else:
         always_stmts.append("/* FF %2d %2d %2d */ assign %s = %s;" % (lut[0], lut[1], lut[2], net_out, net_lout))
     if not "1" in lut_bits:
-        const_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ 1'b0" % (lut[0], lut[1], lut[2])])
+        if not primitives:
+            const_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ 1'b0" % (lut[0], lut[1], lut[2])])
     elif not "0" in lut_bits:
-        const_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ 1'b1" % (lut[0], lut[1], lut[2])])
+        if primitives:
+            const_assigns.append("SB_LUT4 #(.LUT_INIT(16'b1111111111111111)) %s_inst(.O(%s))%s;" % 
+                (net_lout, net_lout, " /* synthesis syn_noprune=1 */" if keep else ""))
+        else:
+            const_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ 1'b1" % (lut[0], lut[1], lut[2])])
     else:
         def make_lut_expr(bits, sigs):
             if not sigs:
@@ -904,21 +946,66 @@ for lut in luts_queue:
             if h_expr == l_expr: return h_expr
             if sigs[0] == "1'b0": return l_expr
             if sigs[0] == "1'b1": return h_expr
-            if h_expr == "1'b1" and l_expr == "1'b0": return sigs[0]
-            if h_expr == "1'b0" and l_expr == "1'b1": return "!" + sigs[0]
-            return "(%s ? %s : %s)" % (sigs[0], h_expr, l_expr)
+            if h_expr == "1'b1" and l_expr == "1'b0": return "(" + sigs[0] + ")"
+            if h_expr == "1'b0" and l_expr == "1'b1": return "!(" + sigs[0] + ")"
+            return "((%s) ? %s : %s)" % (sigs[0], h_expr, l_expr)
         lut_expr = make_lut_expr(lut_bits, [net_in3, net_in2, net_in1, net_in0])
-        lut_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ %s" % (lut[0], lut[1], lut[2], lut_expr)])
+        def clear_lut_mask(bits):
+            newmask = bits
+            if net_in0 == "1'b0":
+                for i in range(16):
+                    if i%2 == 1:
+                        newmask[i] = newmask[i-1]
+            elif net_in0 == "1'b1":
+                for i in range(16):
+                    if i%2 == 0:
+                        newmask[i] = newmask[i+1]
+            if net_in1 == "1'b0":
+                for i in range(16):
+                    if i%4 > 1:
+                        newmask[i] = newmask[i-2]
+            elif net_in1 == "1'b1":
+                for i in range(16):
+                    if i%4 < 2:
+                        newmask[i] = newmask[i+2]
+            if net_in2 == "1'b0":
+                for i in range(16):
+                    if i%8 > 3:
+                        newmask[i] = newmask[i-4]
+            elif net_in2 == "1'b1":
+                for i in range(16):
+                    if i%8 < 4:
+                        newmask[i] = newmask[i+4]
+            if net_in3 == "1'b0":
+                for i in range(16):
+                    if i > 7:
+                        newmask[i] = newmask[i-8]
+            elif net_in3 == "1'b1":
+                for i in range(16):
+                    if i < 8:
+                        newmask[i] = newmask[i+8]
+            return newmask
+            
+        if primitives:
+            lut_bits_reversed = clear_lut_mask(lut_bits)
+            lut_bits_reversed.reverse()
+            lut_assigns.append("SB_LUT4 #(.LUT_INIT(16'b%s)) %s_inst(.I0(%s), .I1(%s), .I2(%s), .I3(%s), .O(%s))%s; // expr: %s" %
+                ("".join(lut_bits_reversed), net_lout, net_in0, net_in1, net_in2, net_in3, net_lout, " /* synthesis syn_noprune=1 */" if keep else "", lut_expr))
+        else:
+            lut_assigns.append([net_lout, "/* LUT   %2d %2d %2d */ %s" % (lut[0], lut[1], lut[2], lut_expr)])
     max_net_len = max(max_net_len, len(net_lout))
 
 for a in const_assigns + lut_assigns + carry_assigns:
-    text_func.append("assign %-*s = %s;" % (max_net_len, a[0], a[1]))
+    if primitives:
+        text_func.append(a + "\n")
+    else:
+        text_func.append("assign %-*s = %s;" % (max_net_len, a[0], a[1]))
 
-new_text_ports = set()
-vec_ports_min = dict()
-vec_ports_max = dict()
-vec_ports_dir = dict()
 if do_collect:
+    new_text_ports = set()
+    vec_ports_min = dict()
+    vec_ports_max = dict()
+    vec_ports_dir = dict()
     for port in text_ports:
         match = re.match(r"(input|output|inout) (.*)\[(\d+)\] ?$", port);
         if match:
@@ -938,23 +1025,37 @@ print("module %s (%s);\n" % (modname, ", ".join(text_ports)))
 new_text_wires = list()
 new_text_regs = list()
 new_text_raw = list()
+portnames = list(pcf_data.values())
+reg_repl = list()
 for line in text_wires:
     match = re.match(r"wire ([^\s;]+)(.*);(.*)", line)
     if match:
-        if strip_comments:
-            name = match.group(1)
-            if match.group(1) in wire_to_reg:
-                new_text_regs.append(name)
+            if strip_comments:
+                name = match.group(1)
+                if pcf_data:
+                    name_new = re.sub(r"\[(\d+)\]", r"\1", name)
+                    if name != name_new:
+                        reg_repl.append((name, name_new))
+                        name = name_new
+                if match.group(1) in wire_to_reg:
+                    new_text_regs.append(name)
+                elif not pcf_data or match.group(1) not in portnames:
+                    new_text_wires.append(name)
+                    continue
             else:
-                new_text_wires.append(name)
-            continue
-        else:
-            name = match.group(1)
-            if match.group(1) in wire_to_reg:
-                if keep:
-                    line = "reg " + name + " = 0 /* synthesis syn_noprune=1 */;" + match.group(3)
-                else:
-                    line = "reg " + name + " = 0;" + match.group(3)
+                name = match.group(1)
+                if pcf_data:
+                    name_new = re.sub(r"\[(\d+)\]", r"\1", name)
+                    if name != name_new:
+                        reg_repl.append((name, name_new))
+                        name = name_new
+                if match.group(1) in wire_to_reg:
+                    if keep:
+                        line = "reg " + name + " = 0 /* synthesis syn_noprune=1 */;" + match.group(3)
+                    else:
+                        line = "reg " + name + " = 0;" + match.group(3)
+                elif pcf_data and match.group(1) in portnames:
+                    line = "// " + line 
     if strip_comments:
         new_text_raw.append(line)
     else:
@@ -974,19 +1075,18 @@ if strip_comments:
         print(line)
     print()
 
-#if do_collect:
-#    for port, direct in list(vec_ports_dir.items()):
-#        min_idx = vec_ports_min[port]
-#        max_idx = vec_ports_max[port]
-#        for i in range(min_idx, max_idx+1):
-#            if direct == "input":  print("assign %s%d = %s[%d];"  % (port, i, port, i))
-#            if direct == "output": print("assign %s[%d] = %s%d ;" % (port, i, port, i))
-#            if direct == "inout":  print("tran(%s[%d], %s[%d] );"   % (port, i, port, i))
-#        print()
+for oldname, newname in reg_repl:
+    print("assign %s = %s;" % (oldname, newname))
 
 for line in text_func:
+    if pcf_data:
+        for oldname, newname in reg_repl:
+            line = line.replace(oldname, newname)
     print(line)
 for line in always_stmts:
+    if pcf_data:
+        for oldname, newname in reg_repl:
+            line = line.replace(oldname, newname)
     print(line)
 print()
 
