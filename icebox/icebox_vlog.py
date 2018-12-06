@@ -25,6 +25,7 @@ check_ieren = False
 check_driver = False
 lookup_symbols = False
 keep = False
+grouting = False
 do_collect = False
 primitives = False
 package = None
@@ -76,6 +77,9 @@ Usage: icebox_vlog [options] [bitmap.asc]
 
     -O
         Use Lattice iCE40 library primitives
+    
+    -g
+        Use Lattice iCE40 global buffers
 
     -R
         enable IeRen database checks
@@ -86,7 +90,7 @@ Usage: icebox_vlog [options] [bitmap.asc]
     sys.exit(0)
 
 try:
-    opts, args = getopt.getopt(sys.argv[1:], "sSlLao:p:P:n:d:ckORD")
+    opts, args = getopt.getopt(sys.argv[1:], "sSlLao:p:P:n:d:ckOgRD")
 except:
     usage()
 
@@ -139,6 +143,8 @@ for o, a in opts:
         keep = True
     elif o == "-O":
         primitives = True
+    elif o == "-g":
+        grouting = True
     elif o == "-R":
         check_ieren = True
     elif o == "-D":
@@ -181,6 +187,9 @@ iocells_skip = set()
 iocells_pll = set()
 locations = list()
 pins = list()
+
+glb_lutout = dict()
+glbnets = dict()
 
 def is_interconn(netname):
     if netname.startswith("sp4_"): return True
@@ -259,6 +268,8 @@ for idx, tile in list(ic.io_tiles.items()):
             match2 = re.match("PINTYPE_(\d+)", entry[2])
             assert match1 and match2
             iocells_type[(idx[0], idx[1], int(match1.group(1)))][int(match2.group(1))] = "1"
+        elif (tc.match(entry[0]) and (entry[1] == "buffer") and (entry[3] == "fabout") and grouting): #global buffer
+            iocells_type[(idx[0], idx[1], 2)] = ["0" for i in range(6)]
     iocells_type[(idx[0], idx[1], 0)] = "".join(iocells_type[(idx[0], idx[1], 0)])
     iocells_type[(idx[0], idx[1], 1)] = "".join(iocells_type[(idx[0], idx[1], 1)])
 
@@ -282,7 +293,10 @@ for segs in sorted(ic.group_segments()):
                         iocells_special.add(cell)
                     iocells_out.add(cell)
                 extra_segments.append((seg[0], seg[1], "io_%d/PAD" % int(match.group(1))))
-
+            if grouting:
+                match = re.match("glb_netwk_(\d+)", seg[2])
+                if (match and (seg[0], seg[1], "fabout") in segs): #global buffer
+                    iocells.add((seg[0], seg[1], 2))
 for cell in iocells:
     if iocells_type[cell] == "100110" and not cell in iocells_special:
         s1 = (cell[0], cell[1], "io_%d/PAD" % cell[2])
@@ -306,7 +320,25 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
     n = next_netname()
     net_segs = set()
     renamed_net_to_port = False
-
+    gbuf = None 
+    n_gbuf = None
+    if grouting:
+        is_global = False
+        netid = None
+        for s in segs:
+            if s[2] == "fabout":
+                gbuf = (s[0], s[1])
+        for s in segs:
+            match = re.match("glb_netwk_(\d+)", s[2])
+            if match and (s[0], s[1]) == gbuf:
+                netid = int(match.group(1))
+                break
+        if netid is None:
+            gbuf = None   
+        else:
+            glbnets[gbuf] = netid
+            n_gbuf = next_netname() 
+    
     for s in segs:
         match =  re.match("io_(\d+)/PAD", s[2])
         if match:
@@ -331,11 +363,17 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
                     text_ports.append("output %s" % p)
                 else:
                     text_ports.append("inout %s" % p)
-                
-                if keep:
-                    text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n)
+                if grouting and gbuf is not None and idx in iocells_in:
+                    n_gbuf = next_netname()
+                    if keep:
+                        text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n_gbuf)
+                    else:
+                        text_wires.append("wire %s;" % n_gbuf)
                 else:
-                    text_wires.append("wire %s;" % n)
+                    if keep:
+                        text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n)
+                    else:
+                        text_wires.append("wire %s;" % n)
                 renamed_net_to_port = True
             elif idx in iocells_in and idx not in iocells_out:
                 text_ports.append("input %s" % p)
@@ -355,11 +393,35 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
             else:
                 luts_queue.add((s[0], s[1], int(match.group(1))))
 
-    nets[n] = segs
+    nets[n] = []
+    segs_tmp = segs
+    segs = []
+    segs_gbuf = []
+    for s in segs_tmp:
+        if gbuf is not None:
+            nets[n_gbuf] = []
+            match_io = re.match("io_(\d+)/D_IN_(\d+)", seg[2])
+            match_lut = re.match("lutff_(\d+)/out", s[2])
+            if (((s[0], s[1]) == gbuf and s[2] == ("glb_netwk_%d" % glbnets[gbuf])) or match_io or match_lut):
+                nets[n].append(s)
+            else:
+                nets[n_gbuf].append(s)
+            segs.append(s)
+        else:        
+            nets[n].append(s)
+            segs.append(s)
 
     for s in segs:
-        seg2net[s] = n
-
+        if n_gbuf is not None:
+            match_io = re.match("io_(\d+)/D_(IN|OUT)_(\d+)", s[2])
+            match_lut = re.match("lutff_(\d+)/out", s[2])
+            if (((s[0], s[1]) == gbuf and s[2] == ("glb_netwk_%d" % glbnets[gbuf])) or match_io or match_lut):
+                seg2net[s] = n
+            else:
+                seg2net[s] = n_gbuf
+        else:
+            seg2net[s] = n
+    
     if not renamed_net_to_port:
         if keep:
             text_wires.append("wire %s /* synthesis syn_keep=1 */;" % n)
@@ -622,6 +684,8 @@ for cell in iocells:
         net_oclk  = seg_to_net((cell[0], cell[1], "io_global/outclk"), "0")
         net_latch = seg_to_net((cell[0], cell[1], "io_global/latch"), "0")
         net_fabout = seg_to_net((cell[0], cell[1], "fabout"), "")
+        if (cell[2] == 2): #global buffer
+            net_glb = seg_to_net((cell[0], cell[1], "glb_netwk_%d" % glbnets[(cell[0], cell[1])]), "")
         iotype = iocells_type[cell]
 
         if cell in iocells_negclk:
@@ -759,7 +823,13 @@ for cell in iocells:
                 text_func.append("assign %s = %s;" % (net_pad, eff_dout))
             else:
                 text_func.append("assign %s = %s ? %s : 1'bz;" % (net_pad, eff_oen, eff_dout))
-
+        
+        if (cell[2] == 2): #global buffer
+            if primitives:
+                text_func.append("SB_GB %s_inst (.USER_SIGNAL_TO_GLOBAL_BUFFER(%s), .GLOBAL_BUFFER_OUTPUT(%s));" % (net_fabout, net_glb, net_fabout))
+                locations.append(("%s_inst" % net_fabout, "%s %s %s" % (cell[0], cell[1], 2)))
+            else:
+                text_func.append("assign %s = %s;" % (net_fabout, net_pad))
         text_func.append("")
 
 for p in unmatched_ports:
@@ -1072,7 +1142,7 @@ for line in text_wires:
                         line = "reg " + name + " = 0 /* synthesis syn_noprune=1 */;" + match.group(3)
                     else:
                         line = "reg " + name + " = 0;" + match.group(3)
-                elif not pcf_data or match.group(1) in portnames:
+                elif pcf_data and match.group(1) in portnames:
                     line = "// " + line 
     if strip_comments:
         new_text_raw.append(line)
