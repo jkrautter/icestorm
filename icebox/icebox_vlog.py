@@ -355,6 +355,7 @@ for segs in sorted(ic.group_segments(extra_connections=extra_connections, extra_
                             unmatched_ports.discard(p)
                         elif lookup_pins:
                             p = "pin_%s" % entry[0]
+                            pins.append(entry[0])
             if not renamed_net_to_port:
                 n = p
                 if idx in iocells_in and idx not in iocells_out:
