@@ -785,12 +785,20 @@ for cell in iocells:
             if iotype[2] == "0" and iotype[3] == "0":
                 ddr_posedge = next_netname()
                 ddr_negedge = next_netname()
-                if keep:
-                    text_func.append("reg %s, %s; /* synthesis syn_noprune=1 */" % (ddr_posedge, ddr_negedge))
+                if primitives:
+                    if keep:
+                        text_func.append("SB_DFFE %s (.C(%s), .E(%s), .Q(%s), .D(%s)) /* synthesis syn_noprune=1 */;" % (ddr_posedge, net_oclk, net_cen, ddr_posedge, net_dout0))
+                        text_func.append("SB_DFFNE %s (.C(%s), .E(%s), .Q(%s), .D(%s)) /* synthesis syn_noprune=1 */;" % (ddr_negedge, net_oclk, net_cen, ddr_negedge, net_dout1))
+                    else:
+                        text_func.append("SB_DFFE %s (.C(%s), .E(%s), .Q(%s), .D(%s));" % (ddr_posedge, net_oclk, net_cen, ddr_posedge, net_dout0))
+                        text_func.append("SB_DFFNE %s (.C(%s), .E(%s), .Q(%s), .D(%s));" % (ddr_negedge, net_oclk, net_cen, ddr_negedge, net_dout1))
                 else:
-                    text_func.append("reg %s, %s;" % (ddr_posedge, ddr_negedge))
-                text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_oclk, ocen_cond, ddr_posedge, net_dout0))
-                text_func.append("always @(%s %s) %s%s <= %s;" % (negedge, net_oclk, ocen_cond, ddr_negedge, net_dout1))
+                    if keep:
+                        text_func.append("reg %s, %s; /* synthesis syn_noprune=1 */" % (ddr_posedge, ddr_negedge))
+                    else:
+                        text_func.append("reg %s, %s;" % (ddr_posedge, ddr_negedge))
+                    text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_oclk, ocen_cond, ddr_posedge, net_dout0))
+                    text_func.append("always @(%s %s) %s%s <= %s;" % (negedge, net_oclk, ocen_cond, ddr_negedge, net_dout1))
                 eff_dout = next_netname()
                 if keep:
                     text_func.append("wire %s; /* synthesis syn_keep=1 */" % (eff_dout))
@@ -806,19 +814,31 @@ for cell in iocells:
 
             if iotype[2] == "1" and iotype[3] == "0":
                 eff_dout = next_netname()
-                if keep:
-                    text_func.append("reg %s; /* synthesis syn_noprune=1 */" % eff_dout)
+                if primitives:
+                    if keep:
+                        text_func.append("SB_DFFE %s_inst (.C(%s), .E(%s), .Q(%s), .D(%s)) /* synthesis syn_noprune=1 */;" % (eff_dout, net_oclk, net_cen, eff_dout, net_dout0))
+                    else:
+                        text_func.append("SB_DFFE %s_inst (.C(%s), .E(%s), .Q(%s), .D(%s));" % (eff_dout, net_oclk, net_cen, eff_dout, net_dout0))
                 else:
-                    text_func.append("reg %s;" % eff_dout)
-                text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_oclk, ocen_cond, eff_dout, net_dout0))
+                    if keep:
+                        text_func.append("reg %s; /* synthesis syn_noprune=1 */" % eff_dout)
+                    else:
+                        text_func.append("reg %s;" % eff_dout)
+                    text_func.append("always @(%s %s) %s%s <= %s;" % (posedge, net_oclk, ocen_cond, eff_dout, net_dout0))
 
             if iotype[2] == "1" and iotype[3] == "1":
                 eff_dout = next_netname()
-                if keep:
-                    text_func.append("reg %s; /* synthesis syn_noprune=1 */" % eff_dout)
+                if primitives:
+                    if keep:
+                        text_func.append("SB_DFFE %s_inst (.C(%s), .E(%s), .Q(%s), .D(%s)) /* synthesis syn_noprune=1 */;" % (eff_dout, net_oclk, net_cen, eff_dout, net_dout0))
+                    else:
+                        text_func.append("SB_DFFE %s_inst (.C(%s), .E(%s), .Q(%s), .D(%s));" % (eff_dout, net_oclk, net_cen, eff_dout, net_dout0))
                 else:
-                    text_func.append("reg %s;" % eff_dout)
-                text_func.append("always @(%s %s) %s%s <= !%s;" % (posedge, net_oclk, ocen_cond, eff_dout, net_dout0))
+                    if keep:
+                        text_func.append("reg %s; /* synthesis syn_noprune=1 */" % eff_dout)
+                    else:
+                        text_func.append("reg %s;" % eff_dout)
+                    text_func.append("always @(%s %s) %s%s <= !%s;" % (posedge, net_oclk, ocen_cond, eff_dout, net_dout0))
 
             if eff_oen == "1":
                 text_func.append("assign %s = %s;" % (net_pad, eff_dout))
